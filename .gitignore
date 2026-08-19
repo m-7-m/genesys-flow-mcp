@@ -1,0 +1,50 @@
+node_modules/
+dist/
+build/
+coverage/
+.next/
+.nuxt/
+.turbo/
+
+# Environment and local configuration
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+logs/
+pnpm-debug.log*
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Caches and temporary files
+.cache/
+.tmp/
+tmp/
+*.tmp
+
+# TypeScript
+*.tsbuildinfo
+
+# Test and tooling output
+.nyc_output/
+playwright-report/
+test-results/
+
+# Editors and operating systems
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Local secrets and certificates
+*.pem
+*.key
