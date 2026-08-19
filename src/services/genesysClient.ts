@@ -15,7 +15,7 @@ export class GenesysClient {
   }
 
   async get<T>(path: string): Promise<T> {
-    const token = this.auth.getAccessToken();
+    const token = await this.auth.getAccessToken();
 
     const response = await this.client.get<T>(path, {
       headers: {

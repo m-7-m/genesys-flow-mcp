@@ -1,5 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/server";
-import { z } from "zod";
+import { getIvrsTool, getFlowByNameTool } from "../tools/index.js";
 
 export function createMcpServer() {
   const server = new McpServer({
@@ -8,24 +8,21 @@ export function createMcpServer() {
   });
 
   server.registerTool(
-    "add",
+    getIvrsTool.name,
     {
-      description: "Add two numbers",
-      inputSchema: z.object({
-        a: z.number(),
-        b: z.number(),
-      }),
+      description: getIvrsTool.description,
+      inputSchema: getIvrsTool.inputSchema,
     },
-    async ({ a, b }) => {
-      return {
-        content: [
-          {
-            type: "text",
-            text: String(a + b),
-          },
-        ],
-      };
+    getIvrsTool.handler as any,
+  );
+
+  server.registerTool(
+    getFlowByNameTool.name,
+    {
+      description: getFlowByNameTool.description,
+      inputSchema: getFlowByNameTool.inputSchema,
     },
+    getFlowByNameTool.handler as any,
   );
 
   return server;

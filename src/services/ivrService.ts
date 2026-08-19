@@ -9,6 +9,8 @@ export class IvrService {
   }
 
   async getIvr(name: string): Promise<IvrResponse> {
-    return this.genesysClient.get<IvrResponse>(`/architect/ivrs?name=${name}`);
+    return this.genesysClient.get<IvrResponse>(
+      `/architect/ivrs?name=${encodeURIComponent(name)}`,
+    );
   }
 }

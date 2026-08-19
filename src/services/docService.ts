@@ -4,26 +4,55 @@
 
 type AnyObj = Record<string, any>;
 
-export class docService {
+export class DocService {
   /**
    * Entry point — pass the parsed flow JSON (the file you get from
    * /flows/{flowId}/latestconfiguration) and get back a Markdown string.
    */
-  public generateReadme(flow: AnyObj): string {
+  public generateReadme(flow: AnyObj, route?: AnyObj): string {
     const seq: AnyObj[] = flow.flowSequenceItemList ?? [];
     const tasks = seq.filter((x) => x.__type === "Task");
     const menus = seq.filter((x) => x.__type === "Menu");
 
     const lines: string[] = [];
 
-    lines.push(`# ${flow.name ?? "Untitled Flow"}\n`);
-    lines.push(`**Description:** ${flow.description ?? ""}\n`);
-    lines.push(`**Default language:** ${flow.defaultLanguage ?? ""}\n`);
+    lines.push(`# ${route?.name ?? flow.name ?? "Untitled Flow"}\n`);
 
+    // ---------- Route ----------
+    lines.push("## Route\n");
+    lines.push(`**IVR Name:** ${route?.name ?? "Not supplied"}  `);
+    lines.push(`**IVR ID:** \`${route?.id ?? "Not supplied"}\`  `);
+    if (route?.dnis?.length) lines.push(`**DNIS:** ${route.dnis.join(", ")}  `);
+    if (route?.state) lines.push(`**State:** ${route.state}  `);
+    lines.push("\n### Configured Flow\n");
+    lines.push(`**Name:** ${flow.name ?? "Untitled Flow"}  `);
+    lines.push(`**ID:** \`${route?.openHoursFlow?.id ?? flow.id ?? "Not supplied"}\`  `);
+    lines.push("**Assignment:** Open-hours flow\n");
+    lines.push("---\n");
+
+    // ---------- Business focus ----------
+    lines.push("## Business Focus\n");
+    lines.push("### Purpose\n");
+    lines.push(`${flow.description ?? "No flow description is configured."}\n`);
+    lines.push("### Customer Routing\n");
+    lines.push("| Menu | Option | Customer choice | Destination |");
+    lines.push("|---|---|---|---|");
+    for (const m of menus) {
+      for (const c of m.menuChoiceList ?? []) {
+        lines.push(
+          `| ${m.name ?? "Unnamed menu"} | ${c.digit ?? "-"} | ${c.name ?? "Unnamed choice"} | ${this.businessDestination(c.action ?? {}, menus)} |`,
+        );
+      }
+    }
+    lines.push("\n---\n");
+
+    // ---------- Technical focus ----------
+    lines.push("## Technical Focus\n");
+    lines.push("### Flow Configuration\n");
+    lines.push(`**Default language:** ${flow.defaultLanguage ?? ""}  `);
     const ttsVoice =
       flow.supportedLanguageOptions?.[0]?.textToSpeech?.voice?.name ?? "";
     lines.push(`**TTS Voice:** ${ttsVoice}\n`);
-    lines.push("\n---\n");
 
     // ---------- Variables ----------
     lines.push("## Flow-scoped Variables\n");
@@ -34,6 +63,17 @@ export class docService {
       const def = v.initialValue?.text ?? "";
       lines.push(
         `| \`${v.name}\` | ${vtype} | \`${def}\` | ${v.description ?? ""} |`,
+      );
+    }
+    lines.push("");
+
+    // ---------- Integrations ----------
+    lines.push("## Data Actions / Integrations\n");
+    lines.push("| Data Action | Used By | Purpose |");
+    lines.push("|---|---|---|");
+    for (const integration of this.dataActions(flow)) {
+      lines.push(
+        `| ${integration.name} | ${integration.usedBy || "Not specified"} | ${integration.category || "Data Action"} |`,
       );
     }
     lines.push("");
@@ -65,6 +105,51 @@ export class docService {
     }
 
     return lines.join("\n");
+  }
+
+  private businessDestination(action: AnyObj, menus: AnyObj[]): string {
+    switch (action.__type) {
+      case "TransferTaskAction":
+        return action.taskName ?? "Task";
+      case "TransferMenuAction":
+        return action.menuName ?? "Menu";
+      case "MenuAction":
+        return menus.find((m) => m.id === action.menuReference)?.name ?? "Menu";
+      case "TransferPureMatchAction":
+        return (action.queues ?? []).map((q: AnyObj) => q.text).join(", ") || "Agent queue";
+      case "DisconnectAction":
+        return "Call ends";
+      default:
+        return action.name ?? action.__type ?? "Not specified";
+    }
+  }
+
+  private dataActions(flow: AnyObj): {
+    name: string;
+    usedBy: string;
+    category: string;
+  }[] {
+    const actions = new Map<string, { name: string; usedBy: string; category: string }>();
+    for (const item of flow.manifest?.dataAction ?? []) {
+      actions.set(item.id ?? item.name, {
+        name: item.name ?? "Unnamed Data Action",
+        usedBy: (item.context ?? []).map((c: AnyObj) => c.name ?? c.actionName).filter(Boolean).join(", "),
+        category: "Data Action",
+      });
+    }
+    for (const container of flow.flowSequenceItemList ?? []) {
+      for (const action of container.actionList ?? []) {
+        if (action.__type !== "DataAction") continue;
+        const key = action.actionId ?? action.actionName;
+        const existing = actions.get(key);
+        actions.set(key, {
+          name: action.actionName ?? existing?.name ?? action.name ?? "Unnamed Data Action",
+          usedBy: existing?.usedBy || `${container.name ?? "Flow"}: ${action.name ?? "Data Action"}`,
+          category: action.category?.name ?? existing?.category ?? "Data Action",
+        });
+      }
+    }
+    return [...actions.values()];
   }
 
   // ---------------------------------------------------------------
