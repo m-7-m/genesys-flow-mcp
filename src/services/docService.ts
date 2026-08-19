@@ -68,12 +68,12 @@ export class DocService {
     lines.push("");
 
     // ---------- Integrations ----------
-    lines.push("## Data Actions / Integrations\n");
-    lines.push("| Data Action | Used By | Purpose |");
+    lines.push("## Integrations and Routing Dependencies\n");
+    lines.push("| Type | Target | Used By |");
     lines.push("|---|---|---|");
-    for (const integration of this.dataActions(flow)) {
+    for (const integration of this.integrations(flow)) {
       lines.push(
-        `| ${integration.name} | ${integration.usedBy || "Not specified"} | ${integration.category || "Data Action"} |`,
+        `| ${integration.type} | ${integration.target} | ${integration.usedBy || "Not specified"} |`,
       );
     }
     lines.push("");
@@ -124,32 +124,68 @@ export class DocService {
     }
   }
 
-  private dataActions(flow: AnyObj): {
-    name: string;
+  private integrations(flow: AnyObj): {
+    type: string;
+    target: string;
     usedBy: string;
-    category: string;
   }[] {
-    const actions = new Map<string, { name: string; usedBy: string; category: string }>();
-    for (const item of flow.manifest?.dataAction ?? []) {
-      actions.set(item.id ?? item.name, {
-        name: item.name ?? "Unnamed Data Action",
-        usedBy: (item.context ?? []).map((c: AnyObj) => c.name ?? c.actionName).filter(Boolean).join(", "),
-        category: "Data Action",
+    const integrations = new Map<string, { type: string; target: string; usedBy: string }>();
+    const add = (type: string, target: string, usedBy: string) => {
+      const key = `${type}:${target}`;
+      const existing = integrations.get(key);
+      integrations.set(key, {
+        type,
+        target,
+        usedBy: existing?.usedBy
+          ? `${existing.usedBy}, ${usedBy}`
+          : usedBy,
       });
+    };
+
+    for (const item of flow.manifest?.dataAction ?? []) {
+      add(
+        "Data Action",
+        item.name ?? "Unnamed Data Action",
+        (item.context ?? [])
+          .map((c: AnyObj) => c.name ?? c.actionName)
+          .filter(Boolean)
+          .join(", ") || "Not specified",
+      );
     }
+
     for (const container of flow.flowSequenceItemList ?? []) {
-      for (const action of container.actionList ?? []) {
-        if (action.__type !== "DataAction") continue;
-        const key = action.actionId ?? action.actionName;
-        const existing = actions.get(key);
-        actions.set(key, {
-          name: action.actionName ?? existing?.name ?? action.name ?? "Unnamed Data Action",
-          usedBy: existing?.usedBy || `${container.name ?? "Flow"}: ${action.name ?? "Data Action"}`,
-          category: action.category?.name ?? existing?.category ?? "Data Action",
-        });
+      const actions = [
+        ...(container.actionList ?? []),
+        ...(container.menuChoiceList ?? []).map((choice: AnyObj) => choice.action),
+      ];
+      for (const action of actions) {
+        const usedBy = `${container.name ?? "Flow"}: ${action?.name ?? action?.__type ?? "Action"}`;
+        switch (action?.__type) {
+          case "DataAction":
+            add(
+              action.category?.name ?? "Data Action",
+              action.actionName ?? "Unnamed Data Action",
+              usedBy,
+            );
+            break;
+          case "CallBotFlowAction":
+            add(
+              "Bot Flow",
+              `${action.flowName ?? "Unnamed Bot Flow"} (${action.flowId ?? "ID not supplied"})`,
+              usedBy,
+            );
+            break;
+          case "TransferPureMatchAction": {
+            const queues = (action.queues ?? [])
+              .map((queue: AnyObj) => queue.text ?? queue.name)
+              .filter(Boolean);
+            if (queues.length) add("ACD Queue", queues.join(", "), usedBy);
+            break;
+          }
+        }
       }
     }
-    return [...actions.values()];
+    return [...integrations.values()];
   }
 
   // ---------------------------------------------------------------
@@ -204,6 +240,11 @@ export class DocService {
         break;
       case "DataAction":
         details.push(`Data Action called: ${a.actionName}`);
+        break;
+      case "CallBotFlowAction":
+        details.push(
+          `Calls Bot Flow: ${a.flowName ?? "Unnamed Bot Flow"} (${a.flowId ?? "ID not supplied"})`,
+        );
         break;
       case "TransferTaskAction":
         details.push(`Transfers execution to Task: ${a.taskName}`);
