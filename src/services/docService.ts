@@ -5,6 +5,13 @@
 type AnyObj = Record<string, any>;
 
 export class DocService {
+  /** Never leave a documentation field visually blank. */
+  private value(value: unknown, fallback = "Not supplied"): string {
+    if (value === undefined || value === null) return fallback;
+    const text = String(value).trim();
+    return text ? text : fallback;
+  }
+
   /**
    * Entry point — pass the parsed flow JSON (the file you get from
    * /flows/{flowId}/latestconfiguration) and get back a Markdown string.
@@ -16,43 +23,35 @@ export class DocService {
 
     const lines: string[] = [];
 
-    lines.push(`# ${route?.name ?? flow.name ?? "Untitled Flow"}\n`);
+    lines.push(`# ${this.value(route?.name ?? flow.name, "Untitled Flow")}\n`);
 
     // ---------- Route ----------
     lines.push("## Route\n");
-    lines.push(`**IVR Name:** ${route?.name ?? "Not supplied"}  `);
-    lines.push(`**IVR ID:** \`${route?.id ?? "Not supplied"}\`  `);
-    if (route?.dnis?.length) lines.push(`**DNIS:** ${route.dnis.join(", ")}  `);
-    if (route?.state) lines.push(`**State:** ${route.state}  `);
+    lines.push(`**IVR Name:** ${this.value(route?.name)}  `);
+    lines.push(`**IVR ID:** \`${this.value(route?.id)}\`  `);
+    lines.push(`**DNIS:** ${this.value(route?.dnis?.join(", "))}  `);
+    lines.push(`**State:** ${this.value(route?.state)}  `);
     lines.push("\n### Configured Flow\n");
-    lines.push(`**Name:** ${flow.name ?? "Untitled Flow"}  `);
-    lines.push(`**ID:** \`${route?.openHoursFlow?.id ?? flow.id ?? "Not supplied"}\`  `);
+    lines.push(`**Name:** ${this.value(flow.name, "Untitled Flow")}  `);
+    lines.push(`**ID:** \`${this.value(route?.openHoursFlow?.id ?? flow.id)}\`  `);
     lines.push("**Assignment:** Open-hours flow\n");
     lines.push("---\n");
 
     // ---------- Business focus ----------
     lines.push("## Business Focus\n");
     lines.push("### Purpose\n");
-    lines.push(`${flow.description ?? "No flow description is configured."}\n`);
-    lines.push("### Customer Routing\n");
-    lines.push("| Menu | Option | Customer choice | Destination |");
-    lines.push("|---|---|---|---|");
-    for (const m of menus) {
-      for (const c of m.menuChoiceList ?? []) {
-        lines.push(
-          `| ${m.name ?? "Unnamed menu"} | ${c.digit ?? "-"} | ${c.name ?? "Unnamed choice"} | ${this.businessDestination(c.action ?? {}, menus)} |`,
-        );
-      }
-    }
+    lines.push(`${this.value(flow.description, "No flow description is configured.")}\n`);
+    lines.push("### Customer Journey\n");
+    lines.push(...this.businessJourney(flow, tasks, menus));
     lines.push("\n---\n");
 
     // ---------- Technical focus ----------
     lines.push("## Technical Focus\n");
     lines.push("### Flow Configuration\n");
-    lines.push(`**Default language:** ${flow.defaultLanguage ?? ""}  `);
+    lines.push(`**Default language:** ${this.value(flow.defaultLanguage)}  `);
     const ttsVoice =
-      flow.supportedLanguageOptions?.[0]?.textToSpeech?.voice?.name ?? "";
-    lines.push(`**TTS Voice:** ${ttsVoice}\n`);
+      flow.supportedLanguageOptions?.[0]?.textToSpeech?.voice?.name;
+    lines.push(`**TTS Voice:** ${this.value(ttsVoice)}\n`);
 
     // ---------- Variables ----------
     lines.push("## Flow-scoped Variables\n");
@@ -60,9 +59,9 @@ export class DocService {
     lines.push("|---|---|---|---|");
     for (const v of flow.variables ?? []) {
       const vtype = (v.__type ?? "").replace("Variable", "");
-      const def = v.initialValue?.text ?? "";
+      const def = this.value(v.initialValue?.text);
       lines.push(
-        `| \`${v.name}\` | ${vtype} | \`${def}\` | ${v.description ?? ""} |`,
+        `| \`${this.value(v.name, "Unnamed variable")}\` | ${this.value(vtype, "Unspecified")} | \`${def}\` | ${this.value(v.description)} |`,
       );
     }
     lines.push("");
@@ -124,6 +123,207 @@ export class DocService {
     }
   }
 
+  /**
+   * Produces a call-tree that business users can follow from the entry menus
+   * through decisions, self service, integrations, transfers and disconnects.
+   */
+  private businessJourney(flow: AnyObj, tasks: AnyObj[], menus: AnyObj[]): string[] {
+    const lines: string[] = [];
+    const allMenus = new Map(menus.map((menu) => [menu.id, menu]));
+    const allTasks = new Map(tasks.map((task) => [task.name, task]));
+    const referencedMenus = new Set<string>();
+    const referencedTasks = new Set<string>();
+
+    const containerActions = (container: AnyObj): AnyObj[] => [
+      ...(container.actionList ?? []),
+      ...(container.menuChoiceList ?? []).map((choice: AnyObj) => choice.action ?? {}),
+    ];
+    for (const container of [...menus, ...tasks]) {
+      for (const action of this.actionsDeep(containerActions(container))) {
+        if (action.__type === "MenuAction" && action.menuReference) referencedMenus.add(action.menuReference);
+        if (action.__type === "TransferMenuAction" && action.menuName) {
+          const target = menus.find((item) => item.name === action.menuName);
+          if (target?.id) referencedMenus.add(target.id);
+        }
+        if (action.__type === "TransferTaskAction" && action.taskName) referencedTasks.add(action.taskName);
+      }
+    }
+
+    const configuredStart = this.findConfiguredStart(flow, tasks, menus);
+    const entryMenus = menus.filter((menu) => !referencedMenus.has(menu.id));
+    const entryTasks = tasks.filter((task) => !referencedTasks.has(task.name));
+    const roots = configuredStart ? [configuredStart] : entryMenus.length || entryTasks.length
+      ? [...entryMenus, ...entryTasks]
+      : [...menus, ...tasks];
+
+    if (!roots.length) return ["- No menus or tasks are configured for this flow.\n"];
+
+    const renderedMenus = new Set<string>();
+    const renderedTasks = new Set<string>();
+    const initialGreeting = this.extractTts(flow.initialPrompts ?? {})[0];
+    if (initialGreeting) lines.push(`**Initial greeting:** ${initialGreeting}\n`);
+    for (const root of roots) {
+      if (root.__type === "Menu") {
+        this.renderBusinessMenu(root, 0, lines, allMenus, allTasks, renderedMenus, renderedTasks);
+      } else {
+        lines.push(`1. **${this.value(root.name, "Unnamed task")}**`);
+        this.renderBusinessTask(root, 1, lines, allMenus, allTasks, renderedMenus, renderedTasks);
+      }
+    }
+    return lines;
+  }
+
+  /** Returns all action-shaped objects, including nested decision/switch outcomes. */
+  private actionsDeep(nodes: AnyObj[]): AnyObj[] {
+    const found: AnyObj[] = [];
+    const visit = (value: unknown) => {
+      if (!value || typeof value !== "object") return;
+      if (Array.isArray(value)) { value.forEach(visit); return; }
+      const item = value as AnyObj;
+      if (typeof item.__type === "string" && item.__type.endsWith("Action")) found.push(item);
+      Object.values(item).forEach(visit);
+    };
+    nodes.forEach(visit);
+    return found;
+  }
+
+  /** Prefer Architect's explicit entry reference over guessing from unreferenced containers. */
+  private findConfiguredStart(flow: AnyObj, tasks: AnyObj[], menus: AnyObj[]): AnyObj | undefined {
+    const ref = flow.initialSequence ?? flow.startAction ?? flow.startSequence;
+    if (typeof ref !== "string") return undefined;
+    return [...tasks, ...menus].find((item) =>
+      item.id === ref || item.name === ref || ref.includes(`[${item.name}_`) || ref.includes(`[${item.name}]`),
+    );
+  }
+
+  private renderBusinessMenu(
+    menu: AnyObj, depth: number, lines: string[], allMenus: Map<string, AnyObj>, allTasks: Map<string, AnyObj>,
+    renderedMenus: Set<string>, renderedTasks: Set<string>,
+  ): void {
+    const label = this.value(menu.name, "Unnamed menu");
+    const indent = "   ".repeat(depth);
+    if (menu.id && renderedMenus.has(menu.id)) {
+      lines.push(`${indent}1. **${label}** *(already shown above)*`);
+      return;
+    }
+    if (menu.id) renderedMenus.add(menu.id);
+    lines.push(`${indent}1. **${label}**`);
+    const greeting = this.extractTts(menu.prompts ?? {})[0];
+    if (greeting) lines.push(`${indent}   - Prompt: ${greeting}`);
+    const choices = menu.menuChoiceList ?? [];
+    if (!choices.length) lines.push(`${indent}   1. No options are configured.`);
+    for (const choice of choices) {
+      const option = this.value(choice.digit, "No digit");
+      const choiceName = this.value(choice.name, "Unnamed option");
+      lines.push(`${indent}   1. **${option} — ${choiceName}**`);
+      this.renderBusinessAction(choice.action ?? {}, depth + 2, lines, allMenus, allTasks, renderedMenus, renderedTasks);
+    }
+  }
+
+  private renderBusinessTask(
+    task: AnyObj, depth: number, lines: string[], allMenus: Map<string, AnyObj>, allTasks: Map<string, AnyObj>,
+    renderedMenus: Set<string>, renderedTasks: Set<string>,
+  ): void {
+    const taskKey = String(task.id ?? task.name);
+    if (renderedTasks.has(taskKey)) {
+      lines.push(`${"   ".repeat(depth)}1. This task is already shown above.`);
+      return;
+    }
+    renderedTasks.add(taskKey);
+    const actions = new Map<string, AnyObj>((task.actionList ?? []).map((action: AnyObj) => [action.id, action]));
+    const seen = new Set<string>();
+    const walk = (id: string | undefined, level: number) => {
+      if (!id) return;
+      if (seen.has(id)) {
+        lines.push(`${"   ".repeat(level)}1. Rejoins a step already shown above.`);
+        return;
+      }
+      seen.add(id);
+      const action = actions.get(id);
+      if (!action) { lines.push(`${"   ".repeat(level)}1. Unresolved step: ${this.value(id)}`); return; }
+      this.renderBusinessAction(action, level, lines, allMenus, allTasks, renderedMenus, renderedTasks);
+      const nexts = this.businessNexts(action, actions);
+      for (const next of nexts) {
+        if (next.label) lines.push(`${"   ".repeat(level + 1)}1. **${next.label}**`);
+        walk(next.id, next.label ? level + 2 : level);
+      }
+    };
+    walk(task.startAction, depth);
+  }
+
+  /** Finds normal, success/failure and custom action transitions in an export. */
+  private businessNexts(action: AnyObj, actions: Map<string, AnyObj>): { id: string; label?: string }[] {
+    const result: { id: string; label?: string }[] = [];
+    const add = (id: unknown, label?: unknown) => {
+      if (typeof id !== "string" || !actions.has(id) || result.some((item) => item.id === id)) return;
+      result.push({ id, label: typeof label === "string" && label.trim() ? label.trim() : undefined });
+    };
+    for (const path of action.paths ?? []) add(path.nextActionId, path.label);
+    if (result.length) return result;
+    add(action.nextAction);
+
+    // Genesys exports vary by action type. Cover transitions such as
+    // successAction, failureAction, errorAction and custom *ActionId fields.
+    for (const [key, value] of Object.entries(action)) {
+      if (!/(?:action|actionid)$/i.test(key) || /^(?:name|actionname)$/i.test(key)) continue;
+      const label = key.replace(/Action(?:Id)?$/i, "").replace(/([a-z])([A-Z])/g, "$1 $2");
+      add(value, label || undefined);
+    }
+    return result;
+  }
+
+  private businessStepTitle(action: AnyObj): string {
+    const tts = this.extractTts(action)[0];
+    if (tts) return tts;
+    switch (action.__type) {
+      case "DataAction":
+        return this.value(action.actionName, "Retrieve or validate customer information")
+          .replace(/\s+-\s+Exported\b.*$/i, "");
+      case "DecisionAction":
+        return this.value(action.name, "Evaluate customer condition");
+      case "TransferPureMatchAction":
+        return "Speak to an agent";
+      case "DisconnectAction":
+        return "End the call";
+      case "CallBotFlowAction":
+        return `Continue with ${this.value(action.flowName, "the bot flow")}`;
+      case "TransferTaskAction":
+        return `Continue to ${this.value(action.taskName, "the next task")}`;
+      case "TransferMenuAction":
+      case "MenuAction":
+        return `Continue to ${this.value(action.menuName, "the next menu")}`;
+      default:
+        return this.value(action.name, action.__type ?? "Unspecified step");
+    }
+  }
+
+  private renderBusinessAction(
+    action: AnyObj, depth: number, lines: string[], allMenus: Map<string, AnyObj>, allTasks: Map<string, AnyObj>,
+    renderedMenus: Set<string>, renderedTasks: Set<string>,
+  ): void {
+    const indent = "   ".repeat(depth);
+    const label = this.businessStepTitle(action);
+    lines.push(`${indent}1. ${label}`);
+    if (action.__type === "DecisionAction") {
+      lines.push(`${indent}   - Decision: ${this.value(this.decisionExpr(action), "Condition not supplied")}`);
+    } else if (action.__type === "DataAction") {
+      lines.push(`${indent}   - Middleware / data action: ${this.value(action.actionName)}`);
+    } else if (action.__type === "TransferPureMatchAction") {
+      lines.push(`${indent}   - Speak to agent: ${this.value((action.queues ?? []).map((q: AnyObj) => q.text ?? q.name).filter(Boolean).join(", "), "Agent queue not supplied")}`);
+    } else if (action.__type === "DisconnectAction") {
+      lines.push(`${indent}   - Call ends`);
+    }
+
+    const menu = action.__type === "MenuAction" ? allMenus.get(action.menuReference) :
+      action.__type === "TransferMenuAction" ? [...allMenus.values()].find((item) => item.name === action.menuName) : undefined;
+    if (menu) this.renderBusinessMenu(menu, depth + 1, lines, allMenus, allTasks, renderedMenus, renderedTasks);
+    const task = action.__type === "TransferTaskAction" ? allTasks.get(action.taskName) : undefined;
+    if (task) {
+      lines.push(`${indent}   1. **${this.value(task.name, "Unnamed task")}**`);
+      this.renderBusinessTask(task, depth + 2, lines, allMenus, allTasks, renderedMenus, renderedTasks);
+    }
+  }
+
   private integrations(flow: AnyObj): {
     type: string;
     target: string;
@@ -154,11 +354,11 @@ export class DocService {
     }
 
     for (const container of flow.flowSequenceItemList ?? []) {
-      const actions = [
+      const topLevelActions = [
         ...(container.actionList ?? []),
         ...(container.menuChoiceList ?? []).map((choice: AnyObj) => choice.action),
       ];
-      for (const action of actions) {
+      for (const action of this.actionsDeep(topLevelActions)) {
         const usedBy = `${container.name ?? "Flow"}: ${action?.name ?? action?.__type ?? "Action"}`;
         switch (action?.__type) {
           case "DataAction":
