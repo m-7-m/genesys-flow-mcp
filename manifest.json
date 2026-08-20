@@ -1,0 +1,62 @@
+{
+  "manifest_version": "0.3",
+  "name": "genesys-flow-mcp",
+  "version": "1.0.0",
+  "description": "Simple tool for documented genesys call flow",
+  "author": {
+    "name": "m-7-m",
+    "email": "mhmdashrf1619@gmail.com",
+    "url": "https://m-7-m.com"
+  },
+  "homepage": "https://github.com/m-7-m/genesys-flow-mcp",
+
+  "server": {
+    "type": "node",
+    "entry_point": "dist/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/dist/index.js"],
+      "env": {
+        "GENESYS_CLIENT_ID": "${user_config.genesys_client_id}",
+        "GENESYS_CLIENT_SECERET": "${user_config.genesys_client_secret}",
+        "GENESYS_REGION": "${user_config.genesys_region}"
+      }
+    }
+  },
+
+  "user_config": {
+    "genesys_client_id": {
+      "type": "string",
+      "title": "Genesys Client ID",
+      "description": "Genesys Cloud OAuth Client ID",
+      "sensitive": true,
+      "required": true
+    },
+
+    "genesys_client_secret": {
+      "type": "string",
+      "title": "Genesys Client Secret",
+      "description": "Genesys Cloud OAuth Client Secret",
+      "sensitive": true,
+      "required": true
+    },
+
+    "genesys_region": {
+      "type": "string",
+      "title": "Genesys Region",
+      "description": "Genesys Cloud region, for example mypurecloud.com",
+      "required": true
+    }
+  },
+
+  "tools": [
+    {
+      "name": "get_flow_by_name",
+      "description": "Get a documented Genesys flow by IVR name."
+    }
+  ],
+
+  "keywords": ["genesys"],
+
+  "license": "ISC"
+}
